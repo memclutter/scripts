@@ -5,6 +5,7 @@ Command structure:
   - `./variables.py export` or `./variable.py export` print ci/cd variables to stdout
   - `./variables.py import` or ./variables import` send environment variables from stdin
   - `./variables.py export | ./variables.py import` transfer variables
+  - `./variables.py clear` clear all variables!
 Arguments:
   - `command` import or export
 Options:
@@ -32,6 +33,7 @@ class Command(enum.Enum):
     """Available commands"""
     cmd_import = 'import'
     cmd_export = 'export'
+    cmd_clear = 'clear'
 
     def __str__(self):
         return self.value
@@ -50,7 +52,7 @@ class GitlabSettings:
         if self.project is not None:
             self.project = urllib.parse.quote_plus(self.project)
 
-        self.url = self.url.rstrip('/')
+        self.url = self.url.rstrip('/') + '/api/v4'
 
 
 class GitlabVariable:
@@ -82,18 +84,33 @@ class GitlabClient:
             data = urllib.parse.urlencode(data).encode()
         request = urllib.request.Request(url, method=method, headers=headers, data=data)
         response = urllib.request.urlopen(request)
-        return json.load(response)
+        raw_data = response.read()
+        if not raw_data:
+            return None, None
+        data = json.loads(raw_data)
+        return data, response.headers
 
     def get_variables(self) -> typing.List[typing.Dict[str, any]]:
         path = f'projects/{self.settings.project}/variables' if self.settings.project \
             else f'groups/{self.settings.group}/variables'
-        return self.call('GET', path)
+        page = 1
+        per_page = 100
+        variables = []
+        while True:
+            data, headers = self.call('GET', path + '?' + urllib.parse.urlencode({'page': page, 'per_page': per_page}))
+            variables.extend(data)
+            total_pages = int(headers.get('X-Total-Pages'))
+            if page == total_pages:
+                break
+            page += 1
+        return variables
 
     def get_variable(self, gitlab_variable: GitlabVariable):
         path = f'projects/{self.settings.project}/variables/{gitlab_variable.key}' if self.settings.project \
             else f'groups/{self.settings.group}/variables/{gitlab_variable.key}'
         path += '?filter[environment_scope]=' + urllib.parse.quote_plus(gitlab_variable.environment_scope)
-        return self.call('GET', path)
+        data, _ = self.call('GET', path)
+        return data
 
     def update_variable(self, gitlab_variable: GitlabVariable):
         path = f'projects/{self.settings.project}/variables/{gitlab_variable.key}' if self.settings.project \
@@ -105,7 +122,8 @@ class GitlabClient:
             if k in ['value', 'variable_type', 'environment_scope'] or
                (k in ['protected', 'masked'] and v is True)
         }
-        return self.call('PUT', path, data)
+        data, _ = self.call('PUT', path, data)
+        return data
 
     def create_variable(self, gitlab_variable: GitlabVariable):
         path = f'projects/{self.settings.project}/variables' if self.settings.project \
@@ -116,7 +134,15 @@ class GitlabClient:
             if k in ['key', 'value', 'variable_type', 'environment_scope'] or
                (k in ['protected', 'masked'] and v is True)
         }
-        return self.call('POST', path, data)
+        data, _ = self.call('POST', path, data)
+        return data
+
+    def delete_variable(self, gitlab_variable: GitlabVariable):
+        path = f'projects/{self.settings.project}/variables/{gitlab_variable.key}' if self.settings.project \
+            else f'groups/{self.settings.group}/variables/{gitlab_variable.key}'
+        path += '?filter[environment_scope]=' + urllib.parse.quote_plus(gitlab_variable.environment_scope)
+        data, _ = self.call('DELETE', path)
+        return data
 
     def upsert_variable(self, gitlab_variable: GitlabVariable):
         try:
@@ -126,15 +152,9 @@ class GitlabClient:
                 raise
             data = None
         if data is not None:
-            try:
-                self.update_variable(gitlab_variable)
-            except urllib.error.HTTPError as e:
-                print(e.code, e.reason)
+            self.update_variable(gitlab_variable)
         else:
-            try:
-                self.create_variable(gitlab_variable)
-            except urllib.error.HTTPError as e:
-                print(e.code, e.read())
+            self.create_variable(gitlab_variable)
 
 
 def cmd_import(gitlab: GitlabClient, gitlab_variables: typing.List[GitlabVariable]):
@@ -151,6 +171,18 @@ def cmd_export(gitlab: GitlabClient) -> typing.List[GitlabVariable]:
         GitlabVariable(**item)
         for item in data
     ]
+
+
+def cmd_clear(gitlab: GitlabClient):
+    print('Are you sure clear variables in gitlab? [No]')
+    answer = input()
+    if answer.lower() == 'yes':
+        variables = [GitlabVariable(**item) for item in gitlab.get_variables()]
+        for variable in variables:
+            try:
+                gitlab.delete_variable(variable)
+            except urllib.error.HTTPError as e:
+                logger.exception(e)
 
 
 def param_gitlab(args) -> GitlabClient:
@@ -182,12 +214,16 @@ def main(argv: list):
                              help='Output file')
     args_parser.add_argument('--gitlab-private-token', type=str, required=True, action='store',
                              help='Gitlab private token')
-    args_parser.add_argument('--gitlab-url', type=str, required=False, default='https://gitlab.com/api/v4/',
+    args_parser.add_argument('--gitlab-url', type=str, required=False, default='https://gitlab.com/',
                              action='store', help='Gitlab url address')
     args_parser.add_argument('--gitlab-group', type=str, required=False, action='store', help='Gitlab group ID or SLUG')
     args_parser.add_argument('--gitlab-project', type=str, required=False, action='store',
                              help='Gitlab project ID or SLUG')
+    args_parser.add_argument('--verbose', action='store_true', default=False, help='Verbose log')
     args = args_parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
 
     routing = {cmd.value: globals()[cmd.name] for cmd in Command}
     param_routing = {p: globals()[f'param_{p}'] for p in {'gitlab', 'gitlab_variables'}}
