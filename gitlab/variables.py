@@ -23,6 +23,7 @@ import sys
 import typing
 import urllib.request
 import urllib.parse
+import urllib.error
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +75,12 @@ class GitlabClient:
         url = f'{self.settings.url}/{path.lstrip("/")}'
         headers = {
             'PRIVATE-TOKEN': self.settings.private_token,
+            'Content-Type': 'application/x-www-form-urlencoded',
         }
         logger.info('request gitlab %s %s', method, path)
-        request = urllib.request.Request(url, method=method, headers=headers)
+        if data is not None:
+            data = urllib.parse.urlencode(data).encode()
+        request = urllib.request.Request(url, method=method, headers=headers, data=data)
         response = urllib.request.urlopen(request)
         return json.load(response)
 
@@ -85,12 +89,59 @@ class GitlabClient:
             else f'groups/{self.settings.group}/variables'
         return self.call('GET', path)
 
+    def get_variable(self, gitlab_variable: GitlabVariable):
+        path = f'projects/{self.settings.project}/variables/{gitlab_variable.key}' if self.settings.project \
+            else f'groups/{self.settings.group}/variables/{gitlab_variable.key}'
+        path += '?filter[environment_scope]=' + urllib.parse.quote_plus(gitlab_variable.environment_scope)
+        return self.call('GET', path)
+
+    def update_variable(self, gitlab_variable: GitlabVariable):
+        path = f'projects/{self.settings.project}/variables/{gitlab_variable.key}' if self.settings.project \
+            else f'groups/{self.settings.group}/variables/{gitlab_variable.key}'
+        path += '?filter[environment_scope]=' + urllib.parse.quote_plus(gitlab_variable.environment_scope)
+        data = {
+            k: v
+            for k, v in gitlab_variable.__dict__.items()
+            if k in ['value', 'variable_type', 'environment_scope'] or
+               (k in ['protected', 'masked'] and v is True)
+        }
+        return self.call('PUT', path, data)
+
+    def create_variable(self, gitlab_variable: GitlabVariable):
+        path = f'projects/{self.settings.project}/variables' if self.settings.project \
+            else f'groups/{self.settings.group}/variables'
+        data = {
+            k: v
+            for k, v in gitlab_variable.__dict__.items()
+            if k in ['key', 'value', 'variable_type', 'environment_scope'] or
+               (k in ['protected', 'masked'] and v is True)
+        }
+        return self.call('POST', path, data)
+
+    def upsert_variable(self, gitlab_variable: GitlabVariable):
+        try:
+            data = self.get_variable(gitlab_variable)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+            data = None
+        if data is not None:
+            try:
+                self.update_variable(gitlab_variable)
+            except urllib.error.HTTPError as e:
+                print(e.code, e.reason)
+        else:
+            try:
+                self.create_variable(gitlab_variable)
+            except urllib.error.HTTPError as e:
+                print(e.code, e.read())
+
 
 def cmd_import(gitlab: GitlabClient, gitlab_variables: typing.List[GitlabVariable]):
     """Import command"""
     for item in gitlab_variables:
-        print(item.key, item.value)
-    pass
+        logger.info('import variable %s environment_scope %s', item.key, item.environment_scope)
+        gitlab.upsert_variable(item)
 
 
 def cmd_export(gitlab: GitlabClient) -> typing.List[GitlabVariable]:
@@ -155,8 +206,8 @@ def main(argv: list):
         handler_kwargs[param_type.name] = param_getter(args)
     result = handler(**handler_kwargs)
     if result is None:
-        args.output.write('')
-    if isinstance(result, str):
+        pass
+    elif isinstance(result, str):
         args.output.write(result)
     else:
         args.output.write(json.dumps(
