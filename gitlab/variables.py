@@ -18,9 +18,13 @@ import argparse
 import enum
 import inspect
 import json
+import logging
 import sys
 import typing
 import urllib.request
+import urllib.parse
+
+logger = logging.getLogger(__name__)
 
 
 class Command(enum.Enum):
@@ -42,6 +46,9 @@ class GitlabSettings:
         self.project: typing.Optional[str] = kwargs.get('project')
 
         # Always remove trailing slash
+        if self.project is not None:
+            self.project = urllib.parse.quote_plus(self.project)
+
         self.url = self.url.rstrip('/')
 
 
@@ -57,37 +64,52 @@ class GitlabVariable:
         self.environment_scope: str = kwargs.get('environment_scope')
 
 
-def cmd_import(gitlab_settings: GitlabSettings, gitlab_variables: typing.List[GitlabVariable]):
+class GitlabClient:
+    """Gitlab api client"""
+
+    def __init__(self, settings: GitlabSettings):
+        self.settings = settings
+
+    def call(self, method: str, path: str, data=None):
+        url = f'{self.settings.url}/{path.lstrip("/")}'
+        headers = {
+            'PRIVATE-TOKEN': self.settings.private_token,
+        }
+        logger.info('request gitlab %s %s', method, path)
+        request = urllib.request.Request(url, method=method, headers=headers)
+        response = urllib.request.urlopen(request)
+        return json.load(response)
+
+    def get_variables(self) -> typing.List[typing.Dict[str, any]]:
+        path = f'projects/{self.settings.project}/variables' if self.settings.project \
+            else f'groups/{self.settings.group}/variables'
+        return self.call('GET', path)
+
+
+def cmd_import(gitlab: GitlabClient, gitlab_variables: typing.List[GitlabVariable]):
     """Import command"""
     for item in gitlab_variables:
         print(item.key, item.value)
     pass
 
 
-def cmd_export(gitlab_settings: GitlabSettings) -> typing.List[GitlabVariable]:
+def cmd_export(gitlab: GitlabClient) -> typing.List[GitlabVariable]:
     """Export command"""
-    url = f'{gitlab_settings.url}/groups/{gitlab_settings.group}/variables'
-    if gitlab_settings.project:
-        url = f'{gitlab_settings.url}/projects/{gitlab_settings.project}/variables'
-    request = urllib.request.Request(url, method='GET', headers={
-        'PRIVATE-TOKEN': gitlab_settings.private_token,
-    })
-    response = urllib.request.urlopen(request)
-    data = json.load(response)
+    data = gitlab.get_variables()
     return [
         GitlabVariable(**item)
         for item in data
     ]
 
 
-def param_gitlab_settings(args) -> GitlabSettings:
+def param_gitlab(args) -> GitlabClient:
     """Gitlab settings builder"""
-    return GitlabSettings(
+    return GitlabClient(GitlabSettings(
         private_token=args.gitlab_private_token,
         url=args.gitlab_url,
         group=args.gitlab_group,
         project=args.gitlab_project,
-    )
+    ))
 
 
 def param_gitlab_variables(args) -> typing.List[GitlabVariable]:
@@ -117,7 +139,7 @@ def main(argv: list):
     args = args_parser.parse_args()
 
     routing = {cmd.value: globals()[cmd.name] for cmd in Command}
-    param_routing = {p: globals()[f'param_{p}'] for p in {'gitlab_settings', 'gitlab_variables'}}
+    param_routing = {p: globals()[f'param_{p}'] for p in {'gitlab', 'gitlab_variables'}}
     handler = routing.get(args.command.value)
     if handler is None:
         raise SystemExit(f'Handler {args.command} not defined')
@@ -133,12 +155,16 @@ def main(argv: list):
         handler_kwargs[param_type.name] = param_getter(args)
     result = handler(**handler_kwargs)
     if result is None:
-        print('')
+        args.output.write('')
     if isinstance(result, str):
-        print(result)
+        args.output.write(result)
     else:
-        args.output.write(json.dumps(result, ensure_ascii=False, indent='  ',
-                         default=lambda obj: obj.__dict__ if isinstance(obj, (GitlabVariable,)) else str(obj)))
+        args.output.write(json.dumps(
+            result,
+            ensure_ascii=False,
+            indent='  ',
+            default=lambda obj: obj.__dict__ if isinstance(obj, (GitlabVariable,)) else str(obj),
+        ))
 
 
 if __name__ == '__main__':
