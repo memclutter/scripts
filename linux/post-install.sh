@@ -123,10 +123,26 @@ function install_docker() {
 
 function install_zsh() {
   log INFO "install zsh"
+
+  if [ "$OS_RELEASE" == "ubuntu" ] || [ "$OS_RELEASE" == "debian" ]; then
+    log DEBUG "apt install zsh"
+    apt install zsh -yqq
+    log DEBUG "change sh"
+    chsh --shell `which zsh` root
+
+    if [ "$QUEST_CREATE_USER" == "y" ]; then
+      chsh --shell `which zsh` $QUEST_CHANGE_USER_NAME
+    fi
+  fi
 }
 
 function install_omz() {
   log INFO "install oh-my-zsh"
+
+  if [ "$OS_RELEASE" == "ubuntu" ] || [ "$OS_RELEASE" == "debian" ]; then
+    log DEBUG "download ohmyzsh"
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+  fi
 }
 
 log INFO "detect os release ${OS_RELEASE}"
@@ -134,33 +150,16 @@ log INFO "detect os release ${OS_RELEASE}"
 install_required_packages
 
 QUEST_CREATE_USER=$(question "Create user?" $QUEST_CREATE_USER)
-QUEST_CHANGE_USER_NAME=$(question_input "Change username?" $QUEST_CHANGE_USER_NAME)
+[ "$QUEST_CREATE_USER" == "y" ] && QUEST_CHANGE_USER_NAME=$(question_input "Change username?" $QUEST_CHANGE_USER_NAME)
 QUEST_SSH_USE=$(question "Use SSH?" $QUEST_SSH_USE)
-QUEST_SSH_CHANGE_PORT=$(question_input "Change SSH port?" $QUEST_SSH_CHANGE_PORT)
+[ "$QUEST_SSH_USE" == "y" ] && QUEST_SSH_CHANGE_PORT=$(question_input "Change SSH port?" $QUEST_SSH_CHANGE_PORT)
 QUEST_INSTALL_DOCKER=$(question "Install docker?" $QUEST_INSTALL_DOCKER)
 QUEST_INSTALL_ZSH=$(question "Install zsh?" $QUEST_INSTALL_ZSH)
-QUEST_INSTALL_OMZ=$(question "Install oh-my-zsh?" $QUEST_INSTALL_OMZ)
+[ "$QUEST_INSTALL_ZSH" == "y" ] && QUEST_INSTALL_OMZ=$(question "Install oh-my-zsh?" $QUEST_INSTALL_OMZ)
 
-if [ "$QUEST_CREATE_USER" == "y" ]; then
-  create_user
-fi
-
-if [ "$QUEST_SSH_USE" == "y" ]; then
-  ssh_use
-
-  if [ "$QUEST_SSH_CHANGE_PORT" != "22" ]; then
-    ssh_change_port
-  fi
-fi
-
-if [ "$QUEST_INSTALL_DOCKER" == "y" ]; then
-  install_docker
-fi
-
-if [ "$QUEST_INSTALL_ZSH" == "y" ]; then
-  install_zsh
-fi
-
-if [ "$QUEST_INSTALL_OMZ" == "y" ]; then
-  install_omz
-fi
+[ "$QUEST_CREATE_USER" == "y" ] && create_user
+[ "$QUEST_SSH_USE" == "y" ] && ssh_use
+[ "$QUEST_SSH_USE" == "y" ] && [ "$QUEST_SSH_CHANGE_PORT" != "22" ] && ssh_change_port
+[ "$QUEST_INSTALL_DOCKER" == "y" ] && install_docker
+[ "$QUEST_INSTALL_ZSH" == "y" ] && install_zsh
+[ "$QUEST_INSTALL_ZSH" == "y" ] && [ "$QUEST_INSTALL_OMZ" == "y" ] && install_omz
