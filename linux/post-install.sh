@@ -55,8 +55,12 @@ function question_input() {
 function install_required_packages () {
   log INFO "install required packages"
   if [ "$OS_RELEASE" == "ubuntu" ] || [ "$OS_RELEASE" == "debian" ]; then
-    log DEBUG "apt install git curl vim"
-    apt update -qqy && apt upgrade -qqy && apt install -qqy git curl vim
+    packages="git curl vim"
+    $QUEST_SSH_USE && packages="$packages openssh-server openssh-client"
+    $QUEST_INSTALL_DOCKER && packages="$packages ca-certificates gnupg lsb-release"
+    $QUEST_INSTALL_ZSH && packages="$packages zsh"
+    log DEBUG "apt install $packages"
+    apt update -qqy && apt upgrade -qqy && apt install -qqy $packages
   fi
 }
 
@@ -74,8 +78,6 @@ function create_user() {
 function ssh_use() {
   log INFO "install ssh"
   if [ "$OS_RELEASE" == "ubuntu" ] || [ "$OS_RELEASE" == "debian" ]; then
-    log DEBUG "apt install openssh-server openssh-client"
-    apt install -qqy openssh-server openssh-client
     log DEBUG "rsync ssh keys from root to user"
     rsync --archive --chown=${QUEST_CHANGE_USER_NAME}:${QUEST_CHANGE_USER_NAME} ~/.ssh /home/${QUEST_CHANGE_USER_NAME}
   fi
@@ -96,9 +98,6 @@ function ssh_change_port() {
 function install_docker() {
   log INFO "install docker"
   if [ "$OS_RELEASE" == "ubuntu" ] || [ "$OS_RELEASE" == "debian" ]; then
-    log DEBUG "install requirements for $OS_RELEASE"
-    apt install -qqy ca-certificates gnupg lsb-release
-
     log DEBUG "setup docker apt repository"
     curl -fsSL https://download.docker.com/linux/${OS_RELEASE}/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/${OS_RELEASE} $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
@@ -125,8 +124,6 @@ function install_zsh() {
   log INFO "install zsh"
 
   if [ "$OS_RELEASE" == "ubuntu" ] || [ "$OS_RELEASE" == "debian" ]; then
-    log DEBUG "apt install zsh"
-    apt install zsh -yqq
     log DEBUG "change sh"
     chsh --shell `which zsh` root
 
@@ -147,8 +144,6 @@ function install_omz() {
 
 log INFO "detect os release ${OS_RELEASE}"
 
-install_required_packages
-
 QUEST_CREATE_USER=$(question "Create user?" $QUEST_CREATE_USER)
 [ "$QUEST_CREATE_USER" == "y" ] && QUEST_CHANGE_USER_NAME=$(question_input "Change username?" $QUEST_CHANGE_USER_NAME)
 QUEST_SSH_USE=$(question "Use SSH?" $QUEST_SSH_USE)
@@ -156,6 +151,8 @@ QUEST_SSH_USE=$(question "Use SSH?" $QUEST_SSH_USE)
 QUEST_INSTALL_DOCKER=$(question "Install docker?" $QUEST_INSTALL_DOCKER)
 QUEST_INSTALL_ZSH=$(question "Install zsh?" $QUEST_INSTALL_ZSH)
 [ "$QUEST_INSTALL_ZSH" == "y" ] && QUEST_INSTALL_OMZ=$(question "Install oh-my-zsh?" $QUEST_INSTALL_OMZ)
+
+install_required_packages
 
 [ "$QUEST_CREATE_USER" == "y" ] && create_user
 [ "$QUEST_SSH_USE" == "y" ] && ssh_use
